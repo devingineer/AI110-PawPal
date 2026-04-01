@@ -30,6 +30,32 @@ Tasks are sorted before scheduling using a two-key lambda: first by priority (`h
 
 `detect_conflicts(scheduled_tasks)` compares every pair of scheduled entries using the standard overlap condition (`A.start < B.end and B.start < A.end`), converting `HH:MM` strings to minutes for the comparison. It returns a list of human-readable warning strings and never raises an exception. Conflicts across different pets are caught the same way as same-pet conflicts. `generate_plan()` calls this automatically and stores any warnings in `DailyPlan.conflicts`, which `display()` prints as a `*** CONFLICTS DETECTED ***` block.
 
+## Testing PawPal+
+
+### Running the tests
+
+```bash
+python -m pytest tests/test_pawpal.py -v
+```
+
+### What the tests cover
+
+16 tests across five categories:
+
+| Category | Tests | What is verified |
+|---|---|---|
+| **Core** | 2 | A task starts as incomplete and is marked done after `mark_complete()`; a pet's task list grows by one after `add_task()` |
+| **Sorting** | 3 | `sort_by_time()` returns entries in ascending `HH:MM` order; `generate_plan()` places high-priority tasks first; equal-priority tasks are broken by time-of-day (morning before evening) |
+| **Recurrence** | 4 | Completing a `daily` task appends a new pending copy due tomorrow; `weekly` tasks spawn a copy due in 7 days; `as_needed` tasks produce no copy; calling `complete_task()` twice does not create duplicate recurrences |
+| **Conflict detection** | 4 | Exact same start time is flagged; partial overlaps mid-task are flagged; adjacent tasks that merely touch are not flagged; a clean sequential schedule produces zero warnings |
+| **Edge cases** | 3 | A pet with zero tasks produces an empty plan without crashing; zero available minutes skips every task; a task whose duration exactly equals the budget is scheduled (not skipped) |
+
+### Confidence level
+
+**4 / 5 stars**
+
+The core scheduling logic — priority sorting, time-of-day tiebreaking, budget enforcement, recurrence spawning, and overlap detection — is fully tested and all 16 tests pass. One star is withheld because the `filter_tasks()` method has no dedicated tests yet, owner preferences (e.g., `no_walks_after`) are stored but not enforced in `generate_plan()`, and there is no test coverage for the Streamlit UI layer in `app.py`.
+
 ## What you will build
 
 Your final app should:
