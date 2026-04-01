@@ -63,10 +63,14 @@ This tradeoff is reasonable for a pet care context because:
 - How did you use AI tools during this project (for example: design brainstorming, debugging, refactoring)?
 - What kinds of prompts or questions were most helpful?
 
+AI was used throughout the project in three main ways. First, for brainstorming — asking which edge cases mattered most for a scheduler (e.g., zero budget, exact budget fit, adjacent-but-not-overlapping tasks) surfaced tests I wouldn't have written on my own. Second, for implementation guidance — asking targeted questions like "how do I sort HH:MM strings with a lambda?" produced working, explainable code rather than just a pattern to copy. Third, for incremental feature additions — each new method (`filter_tasks`, `detect_conflicts`, recurring task logic) was added in isolation by describing exactly what it needed to do and where it should live in the existing class structure. The most effective prompts were specific about the class and method involved and named the constraint the feature had to satisfy.
+
 **b. Judgment and verification**
 
 - Describe one moment where you did not accept an AI suggestion as-is.
 - How did you evaluate or verify what the AI suggested?
+
+When conflict detection was first suggested, the initial framing was to run it inside `generate_plan()` only. I pushed back because `generate_plan()` always schedules tasks sequentially — so it structurally can never produce overlaps on its own. Accepting the suggestion as-is would have meant the detection code could never actually fire in normal use. The fix was to also expose `detect_conflicts()` as a standalone public method that accepts any list of task dicts, so it can be called on manually constructed or externally supplied schedules. I verified this by injecting two overlapping entries in `main.py` and confirming the warning printed.
 
 ---
 
@@ -77,10 +81,14 @@ This tradeoff is reasonable for a pet care context because:
 - What behaviors did you test?
 - Why were these tests important?
 
+16 tests cover five categories: core task/pet operations, priority and time-of-day sorting, recurrence logic (daily, weekly, as_needed, and the double-complete guard), conflict detection (exact overlap, partial overlap, adjacent, and sequential), and edge cases (empty pet, zero budget, exact budget fit). The recurrence and conflict tests were the most important — recurrence is stateful and easy to break with a second call, and the adjacent-task test pins down the boundary of the overlap condition (`<` vs `<=`), which is a silent bug if wrong.
+
 **b. Confidence**
 
 - How confident are you that your scheduler works correctly?
 - What edge cases would you test next if you had more time?
+
+4 out of 5. The scheduling core is well-covered and all 16 tests pass consistently. The gap is in `filter_tasks` (no dedicated tests), the `no_walks_after` preference (stored but not enforced during scheduling), and the Streamlit UI layer (no automated tests at all). If I had more time I would test filtering with combined pet + status arguments, verify that the `no_walks_after` cutoff correctly skips a walk that would start too late, and add a test confirming that `DailyPlan.conflicts` is populated when `generate_plan()` is called on a schedule where two tasks genuinely overlap.
 
 ---
 
@@ -90,10 +98,20 @@ This tradeoff is reasonable for a pet care context because:
 
 - What part of this project are you most satisfied with?
 
+The recurrence system came together cleanly. Adding two fields (`last_completed_date`, `next_due`) to `Task` and updating a single method (`complete_task`) was enough to make daily and weekly tasks self-propagating — no changes were needed anywhere else in the system. That felt like a sign the class boundaries were drawn in the right place: `Task` owns its own state, `Scheduler` owns the logic that acts on it, and `Pet` just holds the list.
+
 **b. What you would improve**
 
 - If you had another iteration, what would you improve or redesign?
 
+I would enforce `owner.preferences` during scheduling rather than only at conflict-detection time. Right now `no_walks_after` is stored but `generate_plan()` ignores it — the constraint exists in the data model but has no effect on the output. I would also reconsider storing tasks as plain dicts inside `DailyPlan.scheduled_tasks`. Using actual `Task` objects (or a lightweight `ScheduledEntry` dataclass) would make the scheduled list type-safe and remove the need to re-look up task attributes by string key throughout the display and conflict-detection code.
+
 **c. Key takeaway**
 
 - What is one important thing you learned about designing systems or working with AI on this project?
+
+The UML diagram was most useful as a forcing function at the start, not as a reference during implementation. The moment I started writing actual code, the diagram fell behind — `Pet` needed task methods, `Scheduler` needed to lose direct task ownership, `DailyPlan` needed new fields. The real lesson is that the diagram should be updated at the end of each feature, not just at the beginning and end of the project. Treating it as a living document would have made the final update much smaller and less surprising.
+
+---
+
+Working in separate chat sessions for each phase — design, sorting, filtering, recurrence, conflict detection, testing, UI — made it easy to stay focused because each session had a single, clear goal and a natural stopping point, which prevented scope creep and made it obvious when a phase was actually done. The most important thing I learned about being the "lead architect" alongside a powerful AI is that the AI can execute faster than you can think through consequences — so the job isn't writing code, it's knowing what to ask for, catching when a suggestion solves the wrong problem, and making the calls the AI can't make for you, like which constraints are hard rules versus soft warnings, or when a cleaner abstraction isn't worth the complexity.

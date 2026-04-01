@@ -30,6 +30,11 @@ Tasks are sorted before scheduling using a two-key lambda: first by priority (`h
 
 `detect_conflicts(scheduled_tasks)` compares every pair of scheduled entries using the standard overlap condition (`A.start < B.end and B.start < A.end`), converting `HH:MM` strings to minutes for the comparison. It returns a list of human-readable warning strings and never raises an exception. Conflicts across different pets are caught the same way as same-pet conflicts. `generate_plan()` calls this automatically and stores any warnings in `DailyPlan.conflicts`, which `display()` prints as a `*** CONFLICTS DETECTED ***` block.
 
+## 📸 Demo
+<a href="img/Demo1.png" target="_blank"><img src="img/Demo1.png" title="PawPal App" width="" alt="PawPal App" class="center-block" /></a>
+<a href="img/Demo2.png" target="_blank"><img src="img/Demo2.png" title="PawPal App" width="" alt="PawPal App" class="center-block" /></a>
+<a href="img/Demo3.png" target="_blank"><img src="img/Demo3.png" title="PawPal App" width="" alt="PawPal App" class="center-block" /></a>
+
 ## Testing PawPal+
 
 ### Running the tests

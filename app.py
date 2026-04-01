@@ -139,18 +139,136 @@ with col2:
         st.success("All tasks reset for a new day.")
 
 if "plan" in st.session_state:
-    plan = st.session_state.plan
-    st.success(plan.summary())
+    plan     = st.session_state.plan
+    scheduler = st.session_state.scheduler
 
+    # ── Summary banner ─────────────────────────────────────────────────────
     if plan.scheduled_tasks:
-        st.write("**Scheduled:**")
-        st.table(plan.scheduled_tasks)
+        st.success(f"Schedule ready — {plan.summary()}")
+    else:
+        st.info("No tasks could be scheduled. Add tasks or increase your time budget.")
 
+    # ── Conflict warnings ──────────────────────────────────────────────────
+    if plan.conflicts:
+        for warning in plan.conflicts:
+            st.warning(f"Time conflict: {warning}")
+
+    # ── Scheduled tasks (sorted by start time) ─────────────────────────────
+    if plan.scheduled_tasks:
+        st.subheader("Scheduled tasks")
+        sorted_entries = scheduler.sort_by_time(plan.scheduled_tasks)
+        st.table([
+            {
+                "Start":    e["start_time"],
+                "Pet":      e["pet"],
+                "Task":     e["task"],
+                "Duration": f"{e['duration_minutes']} min",
+                "Priority": e["priority"].capitalize(),
+                "Frequency": e["frequency"],
+            }
+            for e in sorted_entries
+        ])
+
+    # ── Filter view ────────────────────────────────────────────────────────
+    if st.session_state.owner.pets:
+        st.subheader("Filter tasks")
+        col1, col2 = st.columns(2)
+        with col1:
+            pet_options  = ["All pets"] + [p.name for p in st.session_state.owner.pets]
+            filter_pet   = st.selectbox("Pet", pet_options, key="filter_pet")
+        with col2:
+            filter_status = st.selectbox("Status", ["All", "Pending", "Completed"], key="filter_status")
+
+        pet_arg    = None if filter_pet == "All pets" else filter_pet
+        status_arg = None if filter_status == "All" else filter_status.lower()
+
+        filtered = scheduler.filter_tasks(pet_name=pet_arg, status=status_arg)
+
+        if filtered:
+            st.table([
+                {
+                    "Pet":      pet.name,
+                    "Task":     task.title,
+                    "Priority": task.priority.capitalize(),
+                    "Frequency": task.frequency,
+                    "Status":   "Done" if task.completed else "Pending",
+                    "Next due": str(task.next_due) if task.next_due else "—",
+                }
+                for pet, task in filtered
+            ])
+        else:
+            st.info("No tasks match the selected filters.")
+
+    # ── Mark a task complete ───────────────────────────────────────────────
+    st.subheader("Mark a task complete")
+    pending_pairs = st.session_state.scheduler.filter_tasks(status="pending")
+    if pending_pairs:
+        col1, col2 = st.columns(2)
+        with col1:
+            complete_pet = st.selectbox(
+                "Pet",
+                options=list({pet.name for pet, _ in pending_pairs}),
+                key="complete_pet",
+            )
+        with col2:
+            pet_pending = [
+                task.title
+                for pet, task in pending_pairs
+                if pet.name == complete_pet
+            ]
+            complete_task_title = st.selectbox("Task", options=pet_pending, key="complete_task")
+
+        if st.button("Mark complete"):
+            marked = st.session_state.scheduler.complete_task(complete_pet, complete_task_title)
+            if marked:
+                # Find the task to read next_due
+                completed_task = next(
+                    (t for p in st.session_state.owner.pets
+                     if p.name == complete_pet
+                     for t in p.tasks
+                     if t.title == complete_task_title and t.completed),
+                    None,
+                )
+                if completed_task and completed_task.next_due:
+                    st.success(
+                        f"'{complete_task_title}' marked done! "
+                        f"Next {completed_task.frequency} occurrence due: **{completed_task.next_due}**"
+                    )
+                else:
+                    st.success(f"'{complete_task_title}' marked done!")
+                # Regenerate the plan so the schedule reflects the updated state
+                st.session_state.plan = st.session_state.scheduler.generate_plan()
+                st.rerun()
+    else:
+        st.info("All tasks are already complete. Use Reset to start a new day.")
+
+    # ── Recurring task due dates ───────────────────────────────────────────
+    recurring_with_due = [
+        (pet, task)
+        for pet, task in st.session_state.owner.get_all_tasks()
+        if task.next_due is not None
+    ]
+    if recurring_with_due:
+        with st.expander("Upcoming recurring tasks"):
+            st.table([
+                {
+                    "Pet":       pet.name,
+                    "Task":      task.title,
+                    "Frequency": task.frequency,
+                    "Next due":  str(task.next_due),
+                    "Status":    "Done" if task.completed else "Pending",
+                }
+                for pet, task in sorted(recurring_with_due, key=lambda pair: pair[1].next_due)
+            ])
+
+    # ── Skipped tasks ──────────────────────────────────────────────────────
     if plan.skipped_tasks:
-        st.write("**Skipped:**")
-        st.table(plan.skipped_tasks)
+        with st.expander(f"Skipped tasks ({len(plan.skipped_tasks)})"):
+            for s in plan.skipped_tasks:
+                st.warning(f"[{s['pet']}] **{s['task']}** — {s['reason']}")
 
+    # ── Reasoning ─────────────────────────────────────────────────────────
     if plan.explanations:
-        with st.expander("Reasoning"):
+        with st.expander("Scheduling reasoning"):
             for note in plan.explanations:
                 st.markdown(f"- {note}")
