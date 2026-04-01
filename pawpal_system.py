@@ -1,9 +1,11 @@
 from dataclasses import dataclass, field
+from datetime import date, timedelta
 from typing import Optional
 
 VALID_PRIORITIES = {"low", "medium", "high"}
 VALID_FREQUENCIES = {"daily", "weekly", "as_needed"}
 PRIORITY_ORDER = {"high": 0, "medium": 1, "low": 2}
+TIME_TO_MINUTES = {"morning": 480, "afternoon": 720, "evening": 1080, None: 9999}
 
 
 # ---------------------------------------------------------------------------
@@ -18,6 +20,8 @@ class Task:
     frequency: str = "daily"             # "daily", "weekly", "as_needed"
     preferred_time_of_day: Optional[str] = None  # "morning", "afternoon", "evening"
     completed: bool = False
+    last_completed_date: Optional[date] = None
+    next_due: Optional[date] = None
 
     def __post_init__(self):
         """Validate that priority and frequency are one of the allowed values."""
@@ -30,9 +34,10 @@ class Task:
         """Return True if this task has high priority."""
         return self.priority == "high"
 
-    def mark_complete(self) -> None:
-        """Mark this task as completed."""
+    def mark_complete(self, on: Optional[date] = None) -> None:
+        """Mark this task as completed and record the completion date."""
         self.completed = True
+        self.last_completed_date = on or date.today()
 
     def reset(self) -> None:
         """Reset this task to incomplete (e.g. for a new day)."""
@@ -130,9 +135,10 @@ class DailyPlan:
     skipped_tasks: list[dict] = field(default_factory=list)
     total_minutes_used: int = 0
     explanations: list[str] = field(default_factory=list)
+    conflicts: list[str] = field(default_factory=list)
 
     def display(self) -> str:
-        """Return a formatted string of the full daily plan including skipped tasks."""
+        """Return a formatted string of the full daily plan including skipped tasks and conflicts."""
         if not self.scheduled_tasks:
             return "No tasks scheduled."
         lines = ["=== Daily Plan ==="]
@@ -146,6 +152,10 @@ class DailyPlan:
             lines.append("\n--- Skipped ---")
             for s in self.skipped_tasks:
                 lines.append(f"  {s['task']} ({s['pet']}): {s['reason']}")
+        if self.conflicts:
+            lines.append("\n*** CONFLICTS DETECTED ***")
+            for warning in self.conflicts:
+                lines.append(f"  WARNING: {warning}")
         return "\n".join(lines)
 
     def summary(self) -> str:
@@ -201,16 +211,40 @@ class Scheduler:
                 })
 
         plan.total_minutes_used = minutes_used
+        plan.conflicts = self.detect_conflicts(plan.scheduled_tasks)
         return plan
 
     def complete_task(self, pet_name: str, task_title: str) -> bool:
-        """Mark a task as complete. Returns True if found and marked."""
+        """Mark a task complete and append a fresh pending copy for daily/weekly recurrences."""
         pet = self.owner.get_pet(pet_name)
         if pet is None:
             return False
         for task in pet.tasks:
-            if task.title == task_title:
-                task.mark_complete()
+            if task.title == task_title and not task.completed:
+                today = date.today()
+                task.mark_complete(on=today)
+
+                if task.frequency == "daily":
+                    task.next_due = today + timedelta(days=1)
+                    pet.add_task(Task(
+                        title=task.title,
+                        duration_minutes=task.duration_minutes,
+                        priority=task.priority,
+                        frequency=task.frequency,
+                        preferred_time_of_day=task.preferred_time_of_day,
+                        next_due=task.next_due,
+                    ))
+                elif task.frequency == "weekly":
+                    task.next_due = today + timedelta(weeks=1)
+                    pet.add_task(Task(
+                        title=task.title,
+                        duration_minutes=task.duration_minutes,
+                        priority=task.priority,
+                        frequency=task.frequency,
+                        preferred_time_of_day=task.preferred_time_of_day,
+                        next_due=task.next_due,
+                    ))
+
                 return True
         return False
 
@@ -224,10 +258,65 @@ class Scheduler:
         pet = self.owner.get_pet(pet_name)
         return pet.tasks if pet else []
 
+    def filter_tasks(
+        self,
+        pet_name: Optional[str] = None,
+        status: Optional[str] = None,
+    ) -> list[tuple[Pet, Task]]:
+        """Return (pet, task) pairs optionally narrowed by pet name and/or 'pending'/'completed' status."""
+        pairs = self.owner.get_all_tasks()
+
+        if pet_name is not None:
+            pairs = [(pet, task) for pet, task in pairs if pet.name == pet_name]
+
+        if status == "pending":
+            pairs = [(pet, task) for pet, task in pairs if not task.completed]
+        elif status == "completed":
+            pairs = [(pet, task) for pet, task in pairs if task.completed]
+
+        return pairs
+
+    def detect_conflicts(self, scheduled_tasks: list[dict]) -> list[str]:
+        """Return warning strings for every pair of scheduled tasks whose time windows overlap."""
+        def to_minutes(hhmm: str) -> int:
+            return int(hhmm[:2]) * 60 + int(hhmm[3:])
+
+        warnings = []
+        tasks = list(scheduled_tasks)  # copy so we don't mutate the original
+
+        for i in range(len(tasks)):
+            for j in range(i + 1, len(tasks)):
+                a, b = tasks[i], tasks[j]
+                a_start = to_minutes(a["start_time"])
+                a_end   = a_start + a["duration_minutes"]
+                b_start = to_minutes(b["start_time"])
+                b_end   = b_start + b["duration_minutes"]
+
+                if a_start < b_end and b_start < a_end:
+                    warnings.append(
+                        f"[{a['pet']}] '{a['task']}' ({a['start_time']}, {a['duration_minutes']}min) "
+                        f"overlaps with [{b['pet']}] '{b['task']}' ({b['start_time']}, {b['duration_minutes']}min)"
+                    )
+
+        return warnings
+
     def _sort_by_priority(self) -> list[tuple[Pet, Task]]:
-        """Return all pending (pet, task) pairs sorted high → medium → low."""
+        """Sort pending tasks by priority then time-of-day (high/morning first)."""
         pending = self.owner.get_all_pending_tasks()
-        return sorted(pending, key=lambda pair: PRIORITY_ORDER[pair[1].priority])
+        return sorted(
+            pending,
+            key=lambda pair: (
+                PRIORITY_ORDER[pair[1].priority],
+                TIME_TO_MINUTES[pair[1].preferred_time_of_day],
+            ),
+        )
+
+    def sort_by_time(self, scheduled_tasks: list[dict]) -> list[dict]:
+        """Return scheduled_tasks sorted by start_time (HH:MM) ascending."""
+        return sorted(
+            scheduled_tasks,
+            key=lambda entry: int(entry["start_time"][:2]) * 60 + int(entry["start_time"][3:]),
+        )
 
     def _fits_in_time(self, task: Task, used: int) -> bool:
         """Return True if the task fits within the owner's remaining available time."""
